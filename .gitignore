@@ -1,0 +1,5 @@
+/backend/node_modules
+/backend/data
+/sdk/node_modules
+/sdk/dist
+node_modules

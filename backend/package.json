@@ -1,0 +1,27 @@
+{
+  "name": "session-replay-backend",
+  "version": "1.0.0",
+  "type": "module",
+  "description": "Backend for session replay service",
+  "main": "src/server.js",
+  "scripts": {
+    "start": "node src/server.js",
+    "dev": "nodemon src/server.js"
+  },
+  "dependencies": {
+    "@sparticuz/chromium": "^119.0.0",
+    "cors": "^2.8.5",
+    "express": "^4.18.2",
+    "express-rate-limit": "^7.5.0",
+    "fluent-ffmpeg": "^2.1.2",
+    "multer": "^1.4.5-lts.1",
+    "progress": "^2.0.3",
+    "puppeteer": "^22.0.0",
+    "puppeteer-core": "^22.0.0",
+    "rrweb": "^2.0.0-alpha.4",
+    "rrweb-player": "^2.0.0-alpha.4"
+  },
+  "devDependencies": {
+    "nodemon": "^3.0.3"
+  }
+}

@@ -1,0 +1,18 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <title>Session Replay Test</title>
+    <script src="../dist/session-replay.min.js"></script>
+  </head>
+  <body>
+    <h1>Session Replay Test Page</h1>
+    <input type="text" placeholder="Type something..." />
+    <button onclick="console.log('Button clicked!')">Click me</button>
+
+    <script>
+      SessionReplay.init({
+        apiEndpoint: "http://localhost:3100/api",
+      });
+    </script>
+  </body>
+</html>
