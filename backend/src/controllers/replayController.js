@@ -1,11 +1,12 @@
 import replayService from "../services/replayService.js";
 
-const replayController = {
+export default {
   async listReplays(req, res) {
     try {
       const replays = await replayService.listReplays();
       res.json(replays);
     } catch (error) {
+      console.error("[API] Error listing replays:", error);
       res.status(500).json({ error: error.message });
     }
   },
@@ -15,6 +16,7 @@ const replayController = {
       const replay = await replayService.getReplay(req.params.id);
       res.json(replay);
     } catch (error) {
+      console.error("[API] Error getting replay:", error);
       res.status(500).json({ error: error.message });
     }
   },
@@ -63,17 +65,20 @@ const replayController = {
                   events: data.events,
                   autoPlay: true,
                   showController: true,
-                  skipInactive: false,
+                  skipInactive: true,
+                  triggerFocus: false,
                   showDebug: true,
                   speedOption: [0.5, 1, 2, 4, 8],
                   showTimeline: true,
                   loop: false,
                   mouseTail: {
-                    duration: 1000,
+                    duration: 500,
                     lineCap: "round",
-                    lineWidth: 3,
+                    lineWidth: 2,
                     strokeStyle: "red",
                   },
+                  bufferLength: 50,
+                  useVirtualDom: true,
                 }
               });
               
@@ -91,52 +96,65 @@ const replayController = {
   },
 
   async getListHtml(req, res) {
-    const html = /* html */ `
-      <!DOCTYPE html>
-      <html>
-        <head>
-          <title>Session Replays</title>
-          <style>
-            body { font-family: Arial, sans-serif; margin: 20px; }
-            .session-list { max-width: 800px; margin: 0 auto; }
-            .session-item {
-              padding: 15px;
-              border: 1px solid #ddd;
-              margin: 10px 0;
-              border-radius: 4px;
-              cursor: pointer;
-            }
-            .session-item:hover {
-              background-color: #f5f5f5;
-            }
-          </style>
-        </head>
-        <body>
-          <div class="session-list" id="sessions"></div>
-          <script>
-            async function loadSessions() {
-              const response = await fetch('/api/replays');
-              const sessions = await response.json();
-              
-              const sessionsDiv = document.getElementById('sessions');
-              sessions.forEach(session => {
-                const div = document.createElement('div');
-                div.className = 'session-item';
-                div.innerHTML = 
-                  '<strong>Session:</strong> ' + session.sessionId + '<br>' +
-                  '<strong>URL:</strong> ' + session.url + '<br>' +
-                  '<strong>Time:</strong> ' + new Date(session.timestamp).toLocaleString();
-                div.onclick = () => window.location.href = '/replays/' + session.sessionId;
-                sessionsDiv.appendChild(div);
-              });
-            }
-            loadSessions();
-          </script>
-        </body>
-      </html>
-    `;
-    res.send(html);
+    try {
+      const replays = await replayService.listReplays();
+      const html = `
+        <!DOCTYPE html>
+        <html>
+          <head>
+            <title>Session Replays</title>
+            <style>
+              body { font-family: Arial, sans-serif; margin: 2em; }
+              .replay-list { list-style: none; padding: 0; }
+              .replay-item { 
+                border: 1px solid #ddd; 
+                margin: 1em 0; 
+                padding: 1em;
+                border-radius: 4px;
+              }
+              .replay-item:hover { background: #f5f5f5; }
+              .replay-meta { color: #666; font-size: 0.9em; }
+              .status-recording { color: #2196F3; }
+              .status-complete { color: #4CAF50; }
+            </style>
+          </head>
+          <body>
+            <h1>Session Replays</h1>
+            <ul class="replay-list">
+              ${replays
+                .map(
+                  (replay) => `
+                <li class="replay-item">
+                  <h3>
+                    <a href="/replays/${replay.id}">
+                      Session: ${replay.id}
+                    </a>
+                    <span class="status-${replay.status}">[${
+                    replay.status
+                  }]</span>
+                  </h3>
+                  <div class="replay-meta">
+                    <div>URL: ${replay.url}</div>
+                    <div>Started: ${new Date(
+                      replay.recordedAt
+                    ).toLocaleString()}</div>
+                    <div>Last Updated: ${new Date(
+                      replay.lastUpdated
+                    ).toLocaleString()}</div>
+                    <div>Events: ${replay.eventCount}</div>
+                  </div>
+                </li>
+              `
+                )
+                .join("")}
+            </ul>
+          </body>
+        </html>
+      `;
+      res.send(html);
+    } catch (error) {
+      console.error("[API] Error getting replay list:", error);
+      res.status(500).send("Error loading replays");
+    }
   },
 };
-
-export default replayController;

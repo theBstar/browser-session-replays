@@ -3,3 +3,16 @@
 /sdk/node_modules
 /sdk/dist
 node_modules
+
+# Generated files
+data/videos/
+data/thumbnails/
+
+# Data directories
+backend/data/sessions/*
+backend/data/videos/*
+backend/data/thumbnails/*
+# But keep the directories
+!backend/data/sessions/.gitkeep
+!backend/data/videos/.gitkeep
+!backend/data/thumbnails/.gitkeep

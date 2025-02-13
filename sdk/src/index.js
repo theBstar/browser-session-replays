@@ -1,182 +1,167 @@
-import { record } from "rrweb";
+import * as rrweb from "rrweb";
 
-const SessionReplay = {
-  init: (config) => {
-    console.log("[SessionReplay] Initializing enterprise recorder...");
-    if (typeof window === "undefined") return;
-
-    // Enterprise-grade session ID generation
-    const sessionId = crypto.randomUUID();
-    console.log("[SessionReplay] Session ID:", sessionId);
-
-    let events = [];
-    let isRecording = true;
-    let lastFlush = Date.now();
-
-    // Enterprise-grade event buffering and batching
-    const sendEvents = async () => {
-      if (events.length === 0) return;
-
-      const eventsToSend = [...events];
-      console.log(
-        "[SessionReplay] Event types:",
-        eventsToSend.map((e) => e.type)
-      );
-      console.log("[SessionReplay] First event:", eventsToSend[0]);
-      events = []; // Clear buffer after copying
-
-      try {
-        console.log(
-          `[SessionReplay] Sending batch of ${eventsToSend.length} events`
-        );
-        const response = await fetch(`${config.apiEndpoint}/sessions`, {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            "X-Session-ID": sessionId,
-          },
-          body: JSON.stringify({
-            sessionId,
-            events: eventsToSend,
-            metadata: {
-              userAgent: navigator.userAgent,
-              timestamp: Date.now(),
-              url: window.location.href,
-              viewportHeight: window.innerHeight,
-              viewportWidth: window.innerWidth,
-              screenHeight: window.screen.height,
-              screenWidth: window.screen.width,
-              devicePixelRatio: window.devicePixelRatio,
-            },
-          }),
-        });
-
-        if (!response.ok) {
-          throw new Error(`HTTP error! status: ${response.status}`);
-        }
-        lastFlush = Date.now();
-        console.log("[SessionReplay] Events sent successfully");
-      } catch (error) {
-        console.error("[SessionReplay] Error sending events:", error);
-        // Re-add events to buffer if send fails
-        events.unshift(...eventsToSend);
-      }
+class SessionReplay {
+  constructor(options = {}) {
+    this.options = {
+      endpoint: options.endpoint || "http://localhost:3100",
+      batchSize: options.batchSize || 50,
+      flushInterval: options.flushInterval || 5000,
+      ...options,
     };
 
-    // Enterprise-grade recording configuration
-    const stopFn = record({
-      emit(event) {
-        if (!isRecording) return;
-        events.push(event);
+    this.events = [];
+    this.isRecording = false;
+    this.sessionId = null;
+    this.lastFlush = Date.now();
+    this.stopFn = null;
+
+    // Bind methods
+    this.handleVisibilityChange = this.handleVisibilityChange.bind(this);
+    this.handleBeforeUnload = this.handleBeforeUnload.bind(this);
+
+    // Setup event listeners
+    document.addEventListener("visibilitychange", this.handleVisibilityChange);
+    window.addEventListener("beforeunload", this.handleBeforeUnload);
+  }
+
+  start() {
+    if (this.isRecording) return;
+
+    const metadata = {
+      url: window.location.href,
+      userAgent: navigator.userAgent,
+      timestamp: Date.now(),
+      viewport: {
+        width: window.innerWidth,
+        height: window.innerHeight,
       },
-      sampling: {
-        mousemove: 20, // Capture more mouse movements
-        scroll: 50, // Capture more scrolls
-        input: 100, // Capture more inputs
+    };
+
+    // Generate session ID from server
+    fetch(`${this.options.endpoint}/api/sessions/new`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(metadata),
+    })
+      .then((res) => {
+        if (!res.ok) {
+          throw new Error(`HTTP error! status: ${res.status}`);
+        }
+        return res.json();
+      })
+      .then((data) => {
+        this.sessionId = data.sessionId;
+        this.startRecording();
+      })
+      .catch((error) => {
+        console.error("[SessionReplay] Failed to start session:", error);
+        setTimeout(() => this.start(), 5000);
+      });
+  }
+
+  startRecording() {
+    this.isRecording = true;
+    this.stopFn = rrweb.record({
+      emit: (event) => {
+        this.events.push(event);
+        if (this.events.length >= this.options.batchSize) {
+          this.flush();
+        }
       },
-      // Take snapshots even during idle time
-      checkoutEveryNth: 1,
-      checkoutEveryNms: 1000, // Capture a frame every second regardless of activity
-      inlineStylesheet: true,
       recordCanvas: true,
-      recordCrossOriginIframes: true,
-      // Ensure we capture the full page state
-      ignoreCSSAttributes: [], // Don't ignore any CSS
-      collectFonts: true, // Capture all fonts
+      collectFonts: true,
     });
 
-    // Regular intervals for sending events, even during idle time
-    const flushInterval = setInterval(() => {
-      if (isRecording) {
-        // Force a new snapshot before sending
-        events.push({
-          type: "snapshot",
-          timestamp: Date.now(),
-          data: {
-            // This will trigger a full page snapshot
-            has_dom: true,
-            timestamp: Date.now(),
-          },
-        });
-        sendEvents();
+    // Start flush interval
+    this.flushInterval = setInterval(() => {
+      if (Date.now() - this.lastFlush >= this.options.flushInterval) {
+        this.flush();
       }
-    }, 1000); // Send events every second
+    }, this.options.flushInterval);
+  }
 
-    // Handle page visibility changes
-    document.addEventListener("visibilitychange", () => {
-      if (document.hidden) {
-        sendEvents(); // Flush events when page is hidden
-      }
-    });
+  async flush(isComplete = false) {
+    if (!this.events.length || !this.sessionId) return;
 
-    // Handle page unload
-    window.addEventListener("beforeunload", () => {
-      if (isRecording) {
-        sendEvents(); // Final flush
-      }
-    });
+    const eventsToSend = [...this.events];
+    this.events = [];
+    this.lastFlush = Date.now();
 
-    // Error handling
-    window.addEventListener("error", (error) => {
-      console.error("[SessionReplay] Runtime error:", error);
-      // Attempt to save events on error
-      if (events.length > 0) {
-        sendEvents();
-      }
-    });
-
-    return {
-      stop() {
-        isRecording = false;
-        clearInterval(flushInterval);
-        stopFn();
-        return sendEvents(); // Final flush
-      },
-
-      pause() {
-        isRecording = false;
-      },
-
-      resume() {
-        isRecording = true;
-      },
-
-      flush() {
-        return sendEvents();
-      },
-
-      getSessionId() {
-        return sessionId;
-      },
-
-      getStatus() {
-        return {
-          isRecording,
-          bufferedEvents: events.length,
-          lastFlushTime: lastFlush,
-          sessionId,
-        };
-      },
-
-      // Enterprise features
-      setCustomData(key, value) {
-        events.push({
-          type: "custom",
-          data: { key, value },
-          timestamp: Date.now(),
-        });
-      },
-
-      addPrivacyRule(selector) {
-        if (typeof selector === "string") {
-          const elements = document.querySelectorAll(selector);
-          elements.forEach((el) => el.classList.add("mask-text"));
-        }
-      },
+    const metadata = {
+      url: window.location.href,
+      timestamp: Date.now(),
+      isComplete,
     };
-  },
-};
 
+    try {
+      await fetch(`${this.options.endpoint}/api/sessions/${this.sessionId}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          events: eventsToSend,
+          metadata,
+        }),
+      });
+    } catch (error) {
+      console.error("[SessionReplay] Failed to send events:", error);
+      // Put events back in queue
+      this.events.unshift(...eventsToSend);
+    }
+  }
+
+  handleVisibilityChange() {
+    if (document.hidden) {
+      // Tab is hidden, pause recording and save intermediate state
+      if (this.stopFn) {
+        this.stopFn();
+        this.stopFn = null;
+      }
+      this.flush(false);
+    } else {
+      // Tab is visible again, resume recording
+      if (this.isRecording) {
+        this.startRecording();
+      }
+    }
+  }
+
+  async handleBeforeUnload() {
+    // Stop recording
+    if (this.stopFn) {
+      this.stopFn();
+      this.stopFn = null;
+    }
+
+    // Clear flush interval
+    if (this.flushInterval) {
+      clearInterval(this.flushInterval);
+    }
+
+    // Send remaining events with isComplete flag
+    await this.flush(true);
+  }
+
+  stop() {
+    this.isRecording = false;
+    if (this.stopFn) {
+      this.stopFn();
+      this.stopFn = null;
+    }
+    if (this.flushInterval) {
+      clearInterval(this.flushInterval);
+    }
+    this.flush(true);
+
+    // Remove event listeners
+    document.removeEventListener(
+      "visibilitychange",
+      this.handleVisibilityChange
+    );
+    window.removeEventListener("beforeunload", this.handleBeforeUnload);
+  }
+}
+
+// Export as global and module
 if (typeof window !== "undefined") {
   window.SessionReplay = SessionReplay;
 }

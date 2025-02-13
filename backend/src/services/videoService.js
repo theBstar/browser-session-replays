@@ -1,126 +1,134 @@
-import chromium from "@sparticuz/chromium";
-import ffmpeg from "fluent-ffmpeg";
-import puppeteer from "puppeteer-core";
+import { exec } from "child_process";
+import fs from "fs";
+import path from "path";
+import { fileURLToPath } from "url";
+import { promisify } from "util";
+
+const execAsync = promisify(exec);
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
+const CHROME_PATH = process.env.CHROME_PATH || "/usr/bin/chromium";
 
 export class VideoService {
-  async generateVideo(session, outputPath) {
-    console.log("[Video] Starting enterprise video generation");
+  constructor() {
+    this.videoDir = path.join(__dirname, "../../data/videos");
+    this.thumbnailDir = path.join(__dirname, "../../data/thumbnails");
+    this.tempDir = path.join(this.videoDir, "temp");
+    this.ensureDirectories();
+  }
 
-    const browser = await this.#setupBrowser();
-    const page = await this.#setupPage(browser);
+  async ensureDirectories() {
+    await fs.promises.mkdir(this.videoDir, { recursive: true });
+    await fs.promises.mkdir(this.thumbnailDir, { recursive: true });
+    await fs.promises.mkdir(this.tempDir, { recursive: true });
+  }
+
+  async cleanupTempFiles() {
+    try {
+      const files = await fs.promises.readdir(this.tempDir);
+      await Promise.all(
+        files.map((file) =>
+          fs.promises.unlink(path.join(this.tempDir, file)).catch(() => {})
+        )
+      );
+    } catch (error) {
+      console.warn("[Video] Error cleaning temp files:", error);
+    }
+  }
+
+  async generateVideo(sessionData, outputPath) {
+    console.log("[Video] Starting video generation");
 
     try {
-      await this.#recordSession(page, session, outputPath);
-    } finally {
-      await browser.close();
-    }
+      await this.cleanupTempFiles();
 
-    await this.#convertToMP4(outputPath);
-  }
+      // Create a temporary events file
+      const eventsFile = path.join(this.tempDir, `${Date.now()}.json`);
+      await fs.promises.writeFile(
+        eventsFile,
+        JSON.stringify(sessionData.events)
+      );
 
-  async #setupBrowser() {
-    return puppeteer.launch({
-      executablePath: await chromium.executablePath(),
-      args: chromium.args,
-      defaultViewport: {
-        width: 1920,
-        height: 1080,
-      },
-      headless: true,
-    });
-  }
+      // Use rrvideo CLI with explicit chrome path and environment variables
+      const command = [
+        "PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium",
+        "CHROME_BIN=/usr/bin/chromium",
+        "CHROME_PATH=/usr/bin/chromium",
+        `rrvideo`,
+        `--input ${eventsFile}`,
+        `--output ${outputPath}`,
+        `--width 1920`,
+        `--height 1080`,
+        `--no-optimize`,
+        `--browser-executable-path /usr/bin/chromium`,
+      ].join(" ");
 
-  async #setupPage(browser) {
-    const page = await browser.newPage();
-    await page.setUserAgent(
-      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
-    );
+      console.log("[Video] Running command:", command);
 
-    // Enterprise-grade error handling
-    page.on("error", (error) => {
-      console.error("[Video] Page error:", error);
-    });
+      const { stdout, stderr } = await execAsync(command);
+      console.log("[Video] stdout:", stdout);
+      if (stderr) console.error("[Video] stderr:", stderr);
 
-    page.on("pageerror", (error) => {
-      console.error("[Video] Page error:", error);
-    });
+      // Cleanup events file
+      await fs.promises.unlink(eventsFile);
 
-    return page;
-  }
-
-  async #recordSession(page, session, outputPath) {
-    // Set up screen recording
-    await page.screencast({
-      path: `${outputPath}.frames`,
-      quality: 90,
-      fps: 30,
-    });
-
-    // Replay events
-    for (const event of session.events) {
-      try {
-        await this.#replayEvent(page, event);
-      } catch (error) {
-        console.error("[Video] Event replay error:", error);
+      // Verify video was created
+      const stats = await fs.promises.stat(outputPath);
+      if (stats.size === 0) {
+        throw new Error("Generated video file is empty");
       }
+
+      console.log("[Video] Video generation completed:", outputPath);
+      return outputPath;
+    } catch (error) {
+      console.error("[Video] Error generating video:", error);
+      throw error;
     }
   }
 
-  async #replayEvent(page, event) {
-    switch (event.type) {
-      case "dom":
-        await page.evaluate((snapshot) => {
-          // Apply DOM snapshot
-          document.documentElement.innerHTML = snapshot.html;
-        }, event.data);
-        break;
+  async generateThumbnail(firstEvent) {
+    const thumbnailPath = path.join(this.thumbnailDir, `${Date.now()}.png`);
 
-      case "mouse":
-        await page.mouse.move(event.data.x, event.data.y);
-        if (event.data.type === "click") {
-          await page.mouse.click(event.data.x, event.data.y);
-        }
-        break;
+    try {
+      await this.cleanupTempFiles();
 
-      case "scroll":
-        await page.evaluate((position) => {
-          window.scrollTo(position.x, position.y);
-        }, event.data);
-        break;
+      // Create a temporary events file with just the first event
+      const eventsFile = path.join(this.tempDir, `${Date.now()}-thumb.json`);
+      await fs.promises.writeFile(eventsFile, JSON.stringify([firstEvent]));
 
-      case "input":
-        await page.evaluate((data) => {
-          const element = document.querySelector(data.selector);
-          if (element) {
-            element.value = data.value;
-          }
-        }, event.data);
-        break;
+      // Use rrvideo to generate a single frame with explicit chrome path
+      const tempVideoPath = path.join(this.tempDir, `${Date.now()}-thumb.webm`);
 
-      default:
-        console.log("[Video] Unhandled event type:", event.type);
+      // Generate a very short video
+      const command = [
+        "PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium",
+        "CHROME_BIN=/usr/bin/chromium",
+        "CHROME_PATH=/usr/bin/chromium",
+        `rrvideo`,
+        `--input ${eventsFile}`,
+        `--output ${tempVideoPath}`,
+        `--width 1920`,
+        `--height 1080`,
+        `--no-optimize`,
+        `--duration 1`,
+        `--browser-executable-path /usr/bin/chromium`,
+      ].join(" ");
+
+      await execAsync(command);
+
+      // Extract first frame using ffmpeg
+      await execAsync(`ffmpeg -i ${tempVideoPath} -vframes 1 ${thumbnailPath}`);
+
+      // Cleanup temporary files
+      await fs.promises.unlink(eventsFile);
+      await fs.promises.unlink(tempVideoPath);
+
+      return thumbnailPath;
+    } catch (error) {
+      console.error("[Video] Error generating thumbnail:", error);
+      throw error;
     }
-
-    // Add a small delay between events for smoother playback
-    await page.waitForTimeout(50);
-  }
-
-  async #convertToMP4(outputPath) {
-    return new Promise((resolve, reject) => {
-      ffmpeg()
-        .input(`${outputPath}.frames`)
-        .outputOptions([
-          "-c:v libx264",
-          "-preset fast",
-          "-crf 22",
-          "-movflags +faststart",
-          "-pix_fmt yuv420p",
-        ])
-        .output(outputPath)
-        .on("end", resolve)
-        .on("error", reject)
-        .run();
-    });
   }
 }
 

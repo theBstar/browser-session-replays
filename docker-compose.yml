@@ -1,0 +1,29 @@
+version: "3.8"
+
+services:
+  app:
+    build:
+      context: .
+      args:
+        TARGETARCH: arm64
+    platform: linux/arm64 # For M1/M2 Macs
+    ports:
+      - "3100:3100"
+    volumes:
+      # Mount source code for hot reloading
+      - ./backend/src:/app/backend/src
+      - ./sdk/src:/app/sdk/src
+      # Mount data directories for persistence
+      - ./backend/data/sessions:/app/backend/data/sessions
+      - ./backend/data/videos:/app/backend/data/videos
+      - ./backend/data/thumbnails:/app/backend/data/thumbnails
+      # Mount SDK dist folder
+      - ./sdk/dist:/app/sdk/dist
+    environment:
+      - NODE_ENV=development
+      - PORT=3100
+      # Set Chrome path for puppeteer
+      - CHROME_PATH=/usr/bin/chromium
+      - PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=true
+    # Keep container running and restart on crashes
+    restart: unless-stopped
